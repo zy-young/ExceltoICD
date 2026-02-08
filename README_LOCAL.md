@@ -48,6 +48,24 @@ http://localhost:5000
 - ✅ 断点续传
 - ✅ 历史记录管理
 
+## API Key 配置
+
+在本地运行前，需要配置 LLM API Key。详细说明请查看：
+
+📄 [API Key 配置指南](API_KEY_CONFIG.md)
+
+**快速配置**：
+
+1. 创建 `.env.local` 文件：
+```env
+COZE_WORKLOAD_IDENTITY_API_KEY=your-api-key-here
+```
+
+2. 重启开发服务器：
+```bash
+pnpm run dev
+```
+
 ## 临时文件
 
 处理过程中生成的文件保存在：

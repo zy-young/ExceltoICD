@@ -32,6 +32,11 @@
   - 临时文件不再保存完整results数组，只保存processedCount、savedFiles和统计计数器
   - 每100条清空results数组，避免内存无限增长
   - 使用独立计数器（successCount、failureCount、totalDiseases）替代results数组遍历统计
+- **API Key 配置**：
+  - 使用 `coze-coding-dev-sdk` 的 `Config` 类初始化 LLM 客户端
+  - 支持通过环境变量 `COZE_WORKLOAD_IDENTITY_API_KEY` 配置 API Key
+  - 支持通过 `Config` 构造函数直接传入 `apiKey` 参数
+  - 配置位置：`src/app/api/analyze/route.ts` 第 327-331 行
 
 ## 核心文件修改
 - 文件操作:
@@ -124,6 +129,17 @@
 | results数组内存峰值 | 20000条数据 | 100条数据 | 99.5% |
 | 临时文件大小 | 约100MB | 约1KB | 99.99% |
 | **预计总耗时** | **约4-5小时** | **约2-3小时** | **40-50%** |
+
+## 文档索引
+
+| 文档 | 说明 |
+|------|------|
+| `README_LOCAL.md` | 本地部署快速入门 |
+| `LOCAL_DEPLOYMENT.md` | 完整部署指南（含Docker、PM2、Nginx） |
+| `API_KEY_CONFIG.md` | LLM API Key 配置详细说明 |
+| `COMPRESSED_SUMMARY.md` | 项目完整技术总结（本文档） |
+| `start.sh` | Linux/macOS启动脚本 |
+| `start.bat` | Windows启动脚本 |
 
 ## TODO
 - 测试内存优化后的实际效果（处理20000条数据）
