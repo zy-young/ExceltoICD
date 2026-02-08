@@ -1,0 +1,585 @@
+import { NextRequest } from 'next/server';
+import { LLMClient, Config } from 'coze-coding-dev-sdk';
+import * as XLSX from 'xlsx';
+import { writeFile, readFile, unlink, appendFile } from 'fs/promises';
+import { join } from 'path';
+import { existsSync } from 'fs';
+
+export const runtime = 'nodejs';
+export const maxDuration = 900; // 15分钟超时（可调整到最大值）
+
+// 重试配置
+const MAX_RETRIES = 5;
+const RETRY_DELAY = 1000; // 1秒延迟
+const SAVE_INTERVAL = 100; // 每100条保存一次
+
+// 延迟函数
+const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+// 格式化运行时长
+const formatDuration = (ms: number): string => {
+  const seconds = Math.floor(ms / 1000);
+  const minutes = Math.floor(seconds / 60);
+  const hours = Math.floor(minutes / 60);
+  const days = Math.floor(hours / 24);
+
+  if (days > 0) {
+    return `${days}天${hours % 24}小时`;
+  } else if (hours > 0) {
+    return `${hours}小时${minutes % 60}分钟`;
+  } else if (minutes > 0) {
+    return `${minutes}分${seconds % 60}秒`;
+  } else {
+    return `${seconds}秒`;
+  }
+};
+
+// 日志级别
+enum LogLevel {
+  INFO = 'INFO',
+  WARN = 'WARN',
+  ERROR = 'ERROR',
+  DEBUG = 'DEBUG'
+}
+
+// 错误类型
+enum ErrorType {
+  EXCEL_READ = 'EXCEL_READ',           // Excel读取失败
+  LLM_CALL = 'LLM_CALL',               // LLM调用失败
+  LLM_TIMEOUT = 'LLM_TIMEOUT',         // LLM超时
+  RESPONSE_PARSE = 'RESPONSE_PARSE',   // 响应解析失败
+  NETWORK = 'NETWORK',                 // 网络错误
+  UNKNOWN = 'UNKNOWN'                  // 未知错误
+}
+
+// 日志记录函数
+const logToFile = async (fileId: string, level: LogLevel, message: string, details?: any) => {
+  const logFilePath = join('/app/work/logs/bypass', `analysis-${fileId}.log`);
+  const timestamp = new Date().toISOString();
+  const logEntry = {
+    timestamp,
+    level,
+    message,
+    ...(details && { details })
+  };
+  
+  try {
+    await appendFile(logFilePath, JSON.stringify(logEntry) + '\n', 'utf-8');
+  } catch (error) {
+    console.error('写入日志文件失败:', error);
+  }
+  
+  // 同时输出到控制台
+  const consoleMessage = `[${timestamp}] [${level}] ${message}`;
+  if (level === LogLevel.ERROR) {
+    console.error(consoleMessage, details || '');
+  } else if (level === LogLevel.WARN) {
+    console.warn(consoleMessage, details || '');
+  } else {
+    console.log(consoleMessage, details || '');
+  }
+};
+
+// 分类错误类型
+const classifyError = (error: any): ErrorType => {
+  const errorMessage = error?.message || '';
+  const errorName = error?.name || '';
+  
+  // 检查是否为超时错误
+  if (errorMessage.includes('timeout') || errorMessage.includes('Timeout') || errorName.includes('TimeoutError')) {
+    return ErrorType.LLM_TIMEOUT;
+  }
+  
+  // 检查是否为网络错误
+  if (errorMessage.includes('network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT')) {
+    return ErrorType.NETWORK;
+  }
+  
+  // 检查是否为响应解析错误
+  if (errorMessage.includes('parse') || errorMessage.includes('JSON')) {
+    return ErrorType.RESPONSE_PARSE;
+  }
+  
+  // 检查是否为LLM调用错误
+  if (errorMessage.includes('API') || errorMessage.includes('LLM') || errorMessage.includes('model')) {
+    return ErrorType.LLM_CALL;
+  }
+  
+  return ErrorType.UNKNOWN;
+};
+
+// 格式化错误详情（脱敏）
+const formatErrorDetails = (error: any, retryCount: number = 0): any => {
+  return {
+    errorType: classifyError(error),
+    errorMessage: error?.message || 'Unknown error',
+    errorName: error?.name || 'Unknown',
+    retryAttempt: retryCount + 1,
+    stack: error?.stack ? error.stack.split('\n').slice(0, 3).join('\n') : undefined, // 只保留前3行堆栈
+    ...(error?.code && { errorCode: error.code }),
+    ...(error?.statusCode && { statusCode: error.statusCode })
+  };
+};
+
+// 临时文件路径
+const getTempFilePath = (fileId: string) => join('/tmp', `disease-extraction-${fileId}.json`);
+
+// 保存临时文件
+const saveTempFile = async (fileId: string, data: any) => {
+  const filePath = getTempFilePath(fileId);
+  await writeFile(filePath, JSON.stringify(data), 'utf-8');
+};
+
+// 读取临时文件
+const loadTempFile = async (fileId: string) => {
+  const filePath = getTempFilePath(fileId);
+  if (!existsSync(filePath)) {
+    return null;
+  }
+  try {
+    const content = await readFile(filePath, 'utf-8');
+    return JSON.parse(content);
+  } catch (error) {
+    console.error('读取临时文件失败:', error);
+    return null;
+  }
+};
+
+// 删除临时文件
+const deleteTempFile = async (fileId: string) => {
+  const filePath = getTempFilePath(fileId);
+  try {
+    if (existsSync(filePath)) {
+      await unlink(filePath);
+    }
+  } catch (error) {
+    console.error('删除临时文件失败:', error);
+  }
+};
+
+export async function POST(request: NextRequest) {
+  const encoder = new TextEncoder();
+  
+  // 创建流式响应
+  const stream = new ReadableStream({
+    async start(controller) {
+      try {
+        const formData = await request.formData();
+        const file = formData.get('file') as File;
+        const column = formData.get('column') as string;
+        const systemPrompt = formData.get('systemPrompt') as string;
+        const userPrompt = formData.get('userPrompt') as string;
+        const resumeFromIndex = parseInt(formData.get('resumeFrom') as string || '0');
+        const fileId = formData.get('fileId') as string || Date.now().toString();
+
+        if (!file || !column) {
+          const errorData = { type: 'error', message: '缺少文件或列名' };
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorData)}\n\n`));
+          controller.close();
+          return;
+        }
+
+        // 发送开始信号
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'start', fileId })}\n\n`));
+        
+        // 记录开始分析日志
+        await logToFile(fileId, LogLevel.INFO, '开始分析', {
+          totalRowsExpected: 'unknown',
+          resumeFromIndex,
+          resumeFromIndex > 0 ? '恢复处理' : '新任务'
+        });
+
+        // 读取 Excel 文件
+        await logToFile(fileId, LogLevel.INFO, '开始读取Excel文件', { fileName: file.name });
+        const arrayBuffer = await file.arrayBuffer();
+        const workbook = XLSX.read(arrayBuffer, { type: 'array' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as string[][];
+        await logToFile(fileId, LogLevel.INFO, 'Excel文件读取成功', { 
+          sheetName, 
+          totalRows: jsonData.length 
+        });
+
+        if (jsonData.length < 2) {
+          const errorData = { type: 'error', message: 'Excel 文件为空或格式不正确' };
+          await logToFile(fileId, LogLevel.ERROR, 'Excel文件为空或格式不正确', { rows: jsonData.length });
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorData)}\n\n`));
+          controller.close();
+          return;
+        }
+
+        const headers = jsonData[0];
+        const columnIndex = headers.indexOf(column);
+
+        if (columnIndex === -1) {
+          const errorData = { type: 'error', message: `未找到列名: ${column}` };
+          await logToFile(fileId, LogLevel.ERROR, '未找到指定列', { column, headers });
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorData)}\n\n`));
+          controller.close();
+          return;
+        }
+
+        // 提取指定列的数据
+        await logToFile(fileId, LogLevel.INFO, '开始提取数据', { column, columnIndex });
+        const texts = jsonData.slice(1)
+          .map(row => row[columnIndex]?.toString() || '')
+          .filter(text => text.trim());
+        
+        await logToFile(fileId, LogLevel.INFO, '数据提取完成', { 
+          totalRows: texts.length,
+          emptyRows: jsonData.length - 1 - texts.length 
+        });
+
+        if (texts.length === 0) {
+          const errorData = { type: 'error', message: '指定列没有有效数据' };
+          await logToFile(fileId, LogLevel.ERROR, '指定列没有有效数据', { column });
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorData)}\n\n`));
+          controller.close();
+          return;
+        }
+
+        // 发送总数
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'total', count: texts.length })}\n\n`));
+
+        // 检查是否需要恢复
+        let existingResults: any[] = [];
+        if (resumeFromIndex > 0) {
+          const tempData = await loadTempFile(fileId);
+          if (tempData && tempData.results) {
+            existingResults = tempData.results;
+            await logToFile(fileId, LogLevel.INFO, '从临时文件恢复数据', { 
+              existingResultsCount: existingResults.length,
+              resumeFromIndex 
+            });
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ 
+              type: 'resume', 
+              count: existingResults.length,
+              message: `已从第 ${resumeFromIndex + 1} 条继续处理` 
+            })}\n\n`));
+          }
+        }
+
+        // 使用 LLM 逐条提取病种
+        // 配置超时时间为24小时（86400000ms）以支持大批量长时间处理
+        const config = new Config({ timeout: 86400000 });
+        const client = new LLMClient(config);
+        await logToFile(fileId, LogLevel.INFO, 'LLM客户端初始化完成', { 
+          timeout: 86400000,
+          model: 'doubao-seed-1-8-251228'
+        });
+
+        // 使用自定义系统提示词或默认提示词
+        const finalSystemPrompt = systemPrompt || `你是一个专业的医疗文本分析助手，专门从文本中识别和提取病种名称。
+
+规则：
+1. 仔细分析文本，识别其中提到的所有疾病、病症、病种名称
+2. 只提取明确的病种名称，不要包含症状描述或治疗方式
+3. 病种可以是通用疾病名称（如"高血压"、"糖尿病"）或特定病种（如"阿尔茨海默病"）
+4. 如果文本中没有病种信息，返回"未识别到病种"
+5. 使用标准医学术语
+
+输出格式要求：
+- 直接输出识别到的病种列表
+- 格式：[病种1, 病种2, ...]
+- 如果没有病种：未识别到病种
+- 不要输出任何解释或其他文字
+- 不要使用 markdown 格式`;
+
+        // 记录开始时间
+        const startTime = Date.now();
+
+        let processedCount = existingResults.length;
+        const results = [...existingResults];
+
+        for (let i = resumeFromIndex; i < texts.length; i++) {
+          // 记录每条数据的处理开始时间
+          const itemStartTime = Date.now();
+          
+          try {
+            const text = texts[i];
+            
+            // 构建用户提示词
+            let finalUserPrompt = `请分析以下文本，提取其中的病种名称：
+
+文本：${text}`;
+            
+            // 如果用户提供了自定义提示词，追加到后面
+            if (userPrompt && userPrompt.trim()) {
+              finalUserPrompt += `\n\n额外要求：${userPrompt}`;
+            }
+
+            // 使用流式输出获取单个结果，带重试机制
+            let lastError: Error | null = null;
+            let fullResponse = '';
+            const retryHistory: any[] = []; // 记录重试历史
+            
+            await logToFile(fileId, LogLevel.DEBUG, `开始处理第 ${i + 1} 条数据`, {
+              textPreview: text.substring(0, 50) + (text.length > 50 ? '...' : ''),
+              textLength: text.length
+            });
+            
+            for (let retry = 0; retry <= MAX_RETRIES; retry++) {
+              try {
+                await logToFile(fileId, LogLevel.INFO, `第 ${i + 1} 条数据 - 第 ${retry + 1} 次尝试`, {
+                  retryAttempt: retry + 1,
+                  maxRetries: MAX_RETRIES + 1
+                });
+                
+                const llmCallStart = Date.now();
+                const llmStream = client.stream(
+                  [
+                    { role: 'system', content: finalSystemPrompt },
+                    { role: 'user', content: finalUserPrompt },
+                  ],
+                  { temperature: 0.3, model: 'doubao-seed-1-8-251228' }
+                );
+
+                fullResponse = '';
+                for await (const chunk of llmStream) {
+                  if (chunk.content) {
+                    fullResponse += chunk.content.toString();
+                  }
+                }
+                
+                const llmCallDuration = Date.now() - llmCallStart;
+                await logToFile(fileId, LogLevel.INFO, `第 ${i + 1} 条数据 - 第 ${retry + 1} 次尝试成功`, {
+                  duration: llmCallDuration,
+                  responseLength: fullResponse.length
+                });
+                
+                // 成功获取响应，跳出重试循环
+                lastError = null;
+                break;
+              } catch (error) {
+                lastError = error as Error;
+                const errorDetails = formatErrorDetails(error, retry);
+                retryHistory.push(errorDetails);
+                
+                await logToFile(fileId, LogLevel.WARN, `第 ${i + 1} 条数据 - 第 ${retry + 1} 次尝试失败`, {
+                  errorType: errorDetails.errorType,
+                  errorMessage: errorDetails.errorMessage,
+                  retryAttempt: retry + 1,
+                  willRetry: retry < MAX_RETRIES
+                });
+                
+                // 如果不是最后一次重试，等待后继续
+                if (retry < MAX_RETRIES) {
+                  await delay(RETRY_DELAY);
+                }
+              }
+            }
+
+            // 如果全部重试都失败
+            if (lastError) {
+              // 计算处理时间（包含重试时间）
+              const processingTime = Date.now() - itemStartTime;
+              const errorDetails = formatErrorDetails(lastError, MAX_RETRIES);
+              
+              await logToFile(fileId, LogLevel.ERROR, `第 ${i + 1} 条数据处理失败（全部重试失败）`, {
+                totalRetries: MAX_RETRIES + 1,
+                processingTime,
+                errorType: errorDetails.errorType,
+                errorMessage: errorDetails.errorMessage,
+                errorName: errorDetails.errorName,
+                retryHistorySummary: retryHistory.map(h => ({
+                  attempt: h.retryAttempt,
+                  errorType: h.errorType,
+                  errorMessage: h.errorMessage
+                }))
+              });
+              
+              const errorData = {
+                type: 'result',
+                index: i + 1,
+                originalText: text,
+                diseases: [],
+                error: `${errorDetails.errorType}: ${errorDetails.errorMessage}`,
+                errorType: errorDetails.errorType,
+                errorDetails: errorDetails,
+                retryable: true,
+                processingTime: processingTime,
+                processingTimeFormatted: formatDuration(processingTime)
+              };
+              results.push(errorData);
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorData)}\n\n`));
+              processedCount++;
+              
+              // 每处理10条发送一次进度和运行时长（更频繁更新）
+              if (processedCount % 10 === 0) {
+                const elapsed = Date.now() - startTime;
+                const progressData = {
+                  type: 'progress',
+                  processed: processedCount,
+                  total: texts.length,
+                  percentage: Math.round((processedCount / texts.length) * 100),
+                  elapsed: elapsed,
+                  elapsedFormatted: formatDuration(elapsed)
+                };
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(progressData)}\n\n`));
+                
+                // 每100条自动保存一次
+                if (processedCount % SAVE_INTERVAL === 0) {
+                  await saveTempFile(fileId, { results, processedCount });
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify({ 
+                    type: 'saved', 
+                    count: processedCount 
+                  })}\n\n`));
+                }
+              }
+              continue;
+            }
+
+            // 解析结果
+            const diseases = parseDiseases(fullResponse);
+            
+            await logToFile(fileId, LogLevel.INFO, `第 ${i + 1} 条数据处理成功`, {
+              processingTime: Date.now() - itemStartTime,
+              diseasesCount: diseases.length,
+              diseases: diseases.length > 0 ? diseases : '无病种'
+            });
+
+            // 计算处理时间（毫秒）
+            const processingTime = Date.now() - itemStartTime;
+
+            // 发送结果
+            const resultData = {
+              type: 'result',
+              index: i + 1,
+              originalText: text,
+              diseases: diseases,
+              processingTime: processingTime,
+              processingTimeFormatted: formatDuration(processingTime)
+            };
+            results.push(resultData);
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(resultData)}\n\n`));
+
+            processedCount++;
+
+            // 每处理10条发送一次进度和运行时长（更频繁更新）
+            if (processedCount % 10 === 0) {
+              const elapsed = Date.now() - startTime;
+              const progressData = {
+                type: 'progress',
+                processed: processedCount,
+                total: texts.length,
+                percentage: Math.round((processedCount / texts.length) * 100),
+                elapsed: elapsed,
+                elapsedFormatted: formatDuration(elapsed)
+              };
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify(progressData)}\n\n`));
+              
+              // 每100条自动保存一次
+              if (processedCount % SAVE_INTERVAL === 0) {
+                await saveTempFile(fileId, { results, processedCount });
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ 
+                  type: 'saved', 
+                  count: processedCount 
+                })}\n\n`));
+              }
+            }
+          } catch (error) {
+            console.error(`处理第 ${i + 1} 条数据失败:`, error);
+            // 其他错误 - 计算处理时间
+            const processingTime = Date.now() - itemStartTime;
+            
+            const errorData = {
+              type: 'result',
+              index: i + 1,
+              originalText: texts[i],
+              diseases: [],
+              error: `处理失败: ${(error as Error).message}`,
+              retryable: false,
+              processingTime: processingTime,
+              processingTimeFormatted: formatDuration(processingTime)
+            };
+            results.push(errorData);
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorData)}\n\n`));
+            processedCount++;
+          }
+        }
+
+        // 发送完成信号
+        const elapsed = Date.now() - startTime;
+        
+        // 统计结果
+        const successCount = results.filter(r => !r.error).length;
+        const failureCount = results.filter(r => r.error).length;
+        const totalDiseases = results.reduce((sum, r) => sum + (r.diseases?.length || 0), 0);
+        
+        await logToFile(fileId, LogLevel.INFO, '分析完成', {
+          totalProcessed: processedCount,
+          totalExpected: texts.length,
+          successCount,
+          failureCount,
+          successRate: ((successCount / processedCount) * 100).toFixed(2) + '%',
+          totalDiseases,
+          totalDuration: elapsed,
+          avgProcessingTime: (elapsed / processedCount).toFixed(2) + 'ms',
+          logFilePath: `/app/work/logs/bypass/analysis-${fileId}.log`
+        });
+        
+        const completeData = {
+          type: 'complete',
+          processed: processedCount,
+          total: texts.length,
+          elapsed: elapsed,
+          elapsedFormatted: formatDuration(elapsed),
+          logFile: `analysis-${fileId}.log`
+        };
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(completeData)}\n\n`));
+        
+        // 完成后删除临时文件
+        await deleteTempFile(fileId);
+        
+        controller.close();
+
+      } catch (error) {
+        console.error('流式处理错误:', error);
+        const errorData = { type: 'error', message: '处理过程中发生错误' };
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(errorData)}\n\n`));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Transfer-Encoding': 'chunked',
+    },
+  });
+}
+
+function parseDiseases(response: string): string[] {
+  const cleanedResponse = response.trim();
+  
+  // 检查是否为"未识别到病种"
+  if (cleanedResponse === '未识别到病种' || cleanedResponse.includes('未识别到')) {
+    return [];
+  }
+
+  // 尝试提取方括号中的内容
+  const bracketMatch = cleanedResponse.match(/\[(.*)\]/);
+  if (bracketMatch) {
+    const diseases = bracketMatch[1]
+      .split(',')
+      .map(d => d.trim())
+      .filter(d => d.length > 0);
+    return diseases;
+  }
+
+  // 如果没有方括号，尝试直接解析
+  // 移除可能的序号前缀
+  const withoutPrefix = cleanedResponse.replace(/^\d+[\.\、]\s*/, '');
+  
+  // 按逗号、顿号、分号等分隔符分割
+  const diseases = withoutPrefix
+    .split(/[,，、;；]/)
+    .map(d => d.trim())
+    .filter(d => d.length > 0 && !d.includes('未识别') && !d.includes('无'));
+
+  return diseases;
+}
