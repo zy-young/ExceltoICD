@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Upload, FileText, Loader2, Download, Lightbulb, RefreshCw, XCircle, RotateCcw, Clock, History, CheckCircle } from 'lucide-react';
+import { Upload, FileText, Loader2, Download, Lightbulb, RefreshCw, XCircle, RotateCcw, Clock, History, CheckCircle, Settings } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -365,6 +365,30 @@ export default function DiseaseExtractor() {
       formData.append('column', selectedColumn);
       formData.append('systemPrompt', customSystemPrompt);
       formData.append('fileId', fileId || Date.now().toString());
+      
+      // 从 localStorage 读取 API Key 和配置
+      const apiKey = localStorage.getItem('coze_api_key') || '';
+      formData.append('apiKey', apiKey);
+      
+      // 从 localStorage 读取完整配置
+      let config: any = {};
+      try {
+        const savedConfig = localStorage.getItem('coze_settings');
+        if (savedConfig) {
+          config = JSON.parse(savedConfig);
+        }
+      } catch (error) {
+        console.error('读取配置失败:', error);
+      }
+      
+      // 如果 localStorage 中没有 API Key 但有配置中的 API Key，使用配置中的
+      if (!apiKey && config.apiKey) {
+        formData.append('apiKey', config.apiKey);
+      }
+      
+      // 传递配置给后端
+      formData.append('config', JSON.stringify(config));
+      
       if (resumeFromIndex > 0) {
         formData.append('resumeFrom', resumeFromIndex.toString());
       }
@@ -625,14 +649,22 @@ export default function DiseaseExtractor() {
               上传 Excel 文件，使用自定义提示词实时流式提取文本中的病种名称
             </p>
           </div>
-          <Button
-            onClick={() => router.push('/history')}
-            variant="outline"
-            className="ml-4"
-          >
-            <History className="w-4 h-4 mr-2" />
-            历史记录
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              onClick={() => router.push('/settings')}
+              variant="outline"
+            >
+              <Settings className="w-4 h-4 mr-2" />
+              系统设置
+            </Button>
+            <Button
+              onClick={() => router.push('/history')}
+              variant="outline"
+            >
+              <History className="w-4 h-4 mr-2" />
+              历史记录
+            </Button>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">

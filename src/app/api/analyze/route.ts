@@ -1,9 +1,9 @@
 import { NextRequest } from 'next/server';
-import { LLMClient, Config } from 'coze-coding-dev-sdk';
 import * as XLSX from 'xlsx';
 import { writeFile, readFile, unlink, appendFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { createLLMService } from '@/lib/llm-service';
 
 export const runtime = 'nodejs';
 export const maxDuration = 7200; // 增加到120分钟（2小时）
@@ -11,8 +11,8 @@ export const maxDuration = 7200; // 增加到120分钟（2小时）
 const MAX_RETRIES = 5;
 const RETRY_DELAY = 2000;
 const SAVE_INTERVAL = 100; // 每100条保存一次
-const LLM_CALL_TIMEOUT = 15000; // 15秒超时
-const CONCURRENT_BATCH_SIZE = 20; // 并发处理数量（一次处理20条）
+const LLM_CALL_TIMEOUT = 30000; // 30秒超时（针对本地网络环境优化）
+const CONCURRENT_BATCH_SIZE = 10; // 降低并发数（本地环境优化）
 const LLM_MODEL = 'deepseek-v3-2-251201'; // LLM模型
 
 const delay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -225,7 +225,28 @@ export async function POST(request: NextRequest) {
         const systemPrompt = formData.get('systemPrompt') as string;
         const userPrompt = formData.get('userPrompt') as string;
         const resumeFromIndex = parseInt(formData.get('resumeFrom') as string || '0');
+        const apiKey = formData.get('apiKey') as string; // 从前端接收API Key
         fileId = formData.get('fileId') as string || Date.now().toString();
+
+        // 从前端接收配置参数
+        const frontendConfig = formData.get('config') as string;
+        let parsedConfig: any = {};
+        try {
+          if (frontendConfig) {
+            parsedConfig = JSON.parse(frontendConfig);
+          }
+        } catch (error) {
+          console.error('解析配置失败:', error);
+        }
+
+        // 使用前端配置或默认配置
+        const maxRetries = parsedConfig.maxRetries ?? MAX_RETRIES;
+        const retryDelay = (parsedConfig.retryDelay ?? 2) * 1000; // 转换为毫秒
+        const saveInterval = parsedConfig.saveInterval ?? SAVE_INTERVAL;
+        const llmCallTimeout = (parsedConfig.llmCallTimeout ?? 30) * 1000; // 转换为毫秒
+        const concurrentBatchSize = parsedConfig.concurrentBatchSize ?? CONCURRENT_BATCH_SIZE;
+        const heartbeatBatchInterval = parsedConfig.heartbeatBatchInterval ?? 5;
+        const model = parsedConfig.model || LLM_MODEL;
 
         if (!file || !column) {
           const errorData = { type: 'error', message: '缺少文件或列名' };
@@ -238,7 +259,16 @@ export async function POST(request: NextRequest) {
 
         await logToFile(fileId, LogLevel.INFO, '开始分析', {
           totalRowsExpected: 'unknown',
-          resumeFromIndex
+          resumeFromIndex,
+          config: {
+            model,
+            concurrentBatchSize,
+            llmCallTimeout,
+            maxRetries,
+            retryDelay,
+            saveInterval,
+            heartbeatBatchInterval
+          }
         });
 
         await logToFile(fileId, LogLevel.INFO, '开始读取Excel文件', { fileName: file.name }, controller);
@@ -324,11 +354,11 @@ export async function POST(request: NextRequest) {
           }
         }
 
-        const config = new Config({ timeout: 30000 });
-        const client = new LLMClient(config);
-        await logToFile(fileId, LogLevel.INFO, 'LLM客户端初始化完成', { 
-          timeout: 30000,
-          model: 'deepseek-v3-2-251201'
+        // 使用新的 LLM Service
+        const llmService = createLLMService(model, apiKey);
+        await logToFile(fileId, LogLevel.INFO, 'LLM服务初始化完成', { 
+          model,
+          hasApiKey: !!apiKey
         }, controller);
 
         const finalSystemPrompt = systemPrompt || `你是一个专业的医疗文本分析助手，专门从文本中识别和提取病种名称。
@@ -383,28 +413,27 @@ export async function POST(request: NextRequest) {
             //   textLength: text.length
             // }, controller);
             
-            for (let retry = 0; retry <= MAX_RETRIES; retry++) {
+            for (let retry = 0; retry <= maxRetries; retry++) {
               try {
                 // 只在重试时记录日志，成功时不记录
                 if (retry > 0) {
                   await logToFile(fileId, LogLevel.INFO, `第 ${index + 1} 条数据 - 第 ${retry + 1} 次尝试`, {
                     retryAttempt: retry + 1,
-                    maxRetries: MAX_RETRIES + 1
+                    maxRetries: maxRetries + 1
                   }, controller);
                 }
                 
                 const llmCallStart = Date.now();
                 
                 try {
-                  // 使用非流式invoke调用
-                  const response = await client.invoke(
+                  // 使用统一的 LLM 服务
+                  const response = await llmService.invoke(
                     [
                       { role: 'system', content: finalSystemPrompt },
                       { role: 'user', content: finalUserPrompt },
                     ],
                     { 
-                      temperature: 0.3, 
-                      model: LLM_MODEL
+                      temperature: 0.3,
                     }
                   );
                   
@@ -430,11 +459,11 @@ export async function POST(request: NextRequest) {
                     errorType: errorDetails.errorType,
                     errorMessage: errorDetails.errorMessage,
                     retryAttempt: retry + 1,
-                    willRetry: retry < MAX_RETRIES
+                    willRetry: retry < maxRetries
                   }, controller);
                   
-                  if (retry < MAX_RETRIES) {
-                    await delay(RETRY_DELAY);
+                  if (retry < maxRetries) {
+                    await delay(retryDelay);
                   }
                 }
               } catch (outerError) {
@@ -448,18 +477,18 @@ export async function POST(request: NextRequest) {
                   retryAttempt: retry + 1
                 }, controller);
                 
-                if (retry < MAX_RETRIES) {
-                  await delay(RETRY_DELAY);
+                if (retry < maxRetries) {
+                  await delay(retryDelay);
                 }
               }
             }
 
             if (lastError) {
               const processingTime = Date.now() - itemStartTime;
-              const errorDetails = formatErrorDetails(lastError, MAX_RETRIES);
+              const errorDetails = formatErrorDetails(lastError, maxRetries);
               
               await logToFile(fileId, LogLevel.ERROR, `第 ${index + 1} 条数据处理失败（全部重试失败）`, {
-                totalRetries: MAX_RETRIES + 1,
+                totalRetries: maxRetries + 1,
                 processingTime,
                 errorType: errorDetails.errorType,
                 errorMessage: errorDetails.errorMessage,
@@ -532,13 +561,12 @@ export async function POST(request: NextRequest) {
           }
         };
 
-        // 并发处理数据：分批处理，每批 CONCURRENT_BATCH_SIZE 条
-        const HEARTBEAT_BATCH_INTERVAL = 5; // 每5个批次（100条）发送一次心跳，减少网络IO
+        // 并发处理数据：分批处理，每批 concurrentBatchSize 条
         let batchCount = 0; // 批次计数器
         
-        for (let batchStart = resumeFromIndex; batchStart < texts.length; batchStart += CONCURRENT_BATCH_SIZE) {
+        for (let batchStart = resumeFromIndex; batchStart < texts.length; batchStart += concurrentBatchSize) {
           batchCount++;
-          const batchEnd = Math.min(batchStart + CONCURRENT_BATCH_SIZE, texts.length);
+          const batchEnd = Math.min(batchStart + concurrentBatchSize, texts.length);
           const batchTexts = texts.slice(batchStart, batchEnd);
           
           // 并发处理当前批次
@@ -566,8 +594,8 @@ export async function POST(request: NextRequest) {
             controller.enqueue(encoder.encode(`data: ${JSON.stringify(result)}\n\n`));
           }
 
-          // 每100条保存一次Excel
-          if (processedCount % SAVE_INTERVAL === 0) {
+          // 每saveInterval条保存一次Excel
+          if (processedCount % saveInterval === 0) {
             await logToFile(fileId, LogLevel.INFO, `保存第 ${batchNumber} 批数据`, {
               batchSize: currentBatch.length,
               totalProcessed: processedCount
@@ -587,13 +615,13 @@ export async function POST(request: NextRequest) {
               batchFile: fileName
             })}\n\n`));
             
-            // 定期清空results数组以节省内存（每100条清空一次）
+            // 定期清空results数组以节省内存（每saveInterval条清空一次）
             // 结果已经通过SSE发送给前端并保存到CSV文件，不再需要在内存中保留
             results.length = 0;
           }
           
-          // 每5个批次（100条）发送一次心跳保活，减少网络IO
-          if (batchCount % HEARTBEAT_BATCH_INTERVAL === 0) {
+          // 每heartbeatBatchInterval个批次发送一次心跳保活，减少网络IO
+          if (batchCount % heartbeatBatchInterval === 0) {
           const heartbeatData = {
             type: 'heartbeat',
             timestamp: Date.now(),
@@ -602,8 +630,8 @@ export async function POST(request: NextRequest) {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(heartbeatData)}\n\n`));
           }
           
-          // 每100条发送一次进度更新，减少网络IO
-          if (processedCount % SAVE_INTERVAL === 0) {
+          // 每saveInterval条发送一次进度更新，减少网络IO
+          if (processedCount % saveInterval === 0) {
             const elapsed = Date.now() - startTime;
             const progressData = {
               type: 'progress',
