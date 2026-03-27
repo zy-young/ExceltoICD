@@ -3,6 +3,7 @@ import * as XLSX from 'xlsx';
 import { writeFile, readFile, unlink, appendFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
+import { tmpdir } from 'os';
 import { createLLMService } from '@/lib/llm-service';
 
 export const runtime = 'nodejs';
@@ -50,14 +51,18 @@ enum ErrorType {
   UNKNOWN = 'UNKNOWN'
 }
 
+interface LogDetails {
+  [key: string]: unknown;
+}
+
 const logToFile = async (
   fileId: string,
   level: LogLevel,
   message: string,
-  details?: any,
-  controller?: ReadableStreamDefaultController<any>
+  details?: LogDetails,
+  controller?: ReadableStreamDefaultController<Uint8Array>
 ) => {
-  const logDir = '/app/work/logs/bypass';
+  const logDir = join(tmpdir(), 'excel-icd-logs');
   try {
     await mkdir(logDir, { recursive: true });
   } catch (error) {
@@ -89,48 +94,62 @@ const logToFile = async (
   }
 };
 
-const classifyError = (error: any): ErrorType => {
-  const errorMessage = error?.message || '';
-  
+interface ErrorLike {
+  message?: string;
+  name?: string;
+  stack?: string;
+  code?: string;
+  statusCode?: number;
+}
+
+const classifyError = (error: unknown): ErrorType => {
+  const errorMessage = (error as ErrorLike)?.message || '';
+
   if (errorMessage.includes('timeout') || errorMessage.includes('Timeout')) {
     return ErrorType.LLM_TIMEOUT;
   }
-  
   if (errorMessage.includes('network') || errorMessage.includes('ECONNREFUSED') || errorMessage.includes('ETIMEDOUT')) {
     return ErrorType.NETWORK;
   }
-  
   if (errorMessage.includes('parse') || errorMessage.includes('JSON')) {
     return ErrorType.RESPONSE_PARSE;
   }
-  
   if (errorMessage.includes('API') || errorMessage.includes('LLM') || errorMessage.includes('model')) {
     return ErrorType.LLM_CALL;
   }
-  
   return ErrorType.UNKNOWN;
 };
 
-const formatErrorDetails = (error: any, retryCount: number = 0): any => {
+const formatErrorDetails = (error: unknown, retryCount: number = 0): LogDetails => {
+  const e = error as ErrorLike;
   return {
     errorType: classifyError(error),
-    errorMessage: error?.message || 'Unknown error',
-    errorName: error?.name || 'Unknown',
+    errorMessage: e?.message || 'Unknown error',
+    errorName: e?.name || 'Unknown',
     retryAttempt: retryCount + 1,
-    stack: error?.stack ? error.stack.split('\n').slice(0, 3).join('\n') : undefined,
-    ...(error?.code && { errorCode: error.code }),
-    ...(error?.statusCode && { statusCode: error.statusCode })
+    stack: e?.stack ? e.stack.split('\n').slice(0, 3).join('\n') : undefined,
+    ...(e?.code && { errorCode: e.code }),
+    ...(e?.statusCode && { statusCode: e.statusCode }),
   };
 };
 
-const getTempFilePath = (fileId: string) => join('/tmp', `disease-extraction-${fileId}.json`);
+const getTempFilePath = (fileId: string) => join(tmpdir(), `disease-extraction-${fileId}.json`);
 
-const saveTempFile = async (fileId: string, data: any) => {
+interface TempFileData {
+  processedCount?: number;
+  savedFiles?: string[];
+  successCount?: number;
+  failureCount?: number;
+  totalDiseases?: number;
+  results?: ResultItem[];
+}
+
+const saveTempFile = async (fileId: string, data: TempFileData) => {
   const filePath = getTempFilePath(fileId);
   await writeFile(filePath, JSON.stringify(data), 'utf-8');
 };
 
-const loadTempFile = async (fileId: string) => {
+const loadTempFile = async (fileId: string): Promise<TempFileData | null> => {
   const filePath = getTempFilePath(fileId);
   if (!existsSync(filePath)) {
     return null;
@@ -156,20 +175,28 @@ const deleteTempFile = async (fileId: string) => {
 };
 
 // 保存结果到Excel文件（每100条一个文件）
-const saveResultsToExcel = async (results: any[], batchNumber: number, fileId: string) => {
-  const outputDir = '/tmp/excel-exports';
-  try {
-    await mkdir(outputDir, { recursive: true });
-  } catch (error) {
-    // 忽略目录已存在的错误
-  }
-  
+interface ResultItem {
+  type: string;
+  index: number;
+  originalText: string;
+  diseases: string[];
+  error?: string;
+  errorType?: string;
+  retryable?: boolean;
+  processingTime: number;
+  processingTimeFormatted: string;
+}
+
+const saveResultsToExcel = async (results: ResultItem[], batchNumber: number, fileId: string) => {
+  const outputDir = join(tmpdir(), 'excel-exports');
+  await mkdir(outputDir, { recursive: true });
+
   const headers = ['序号', '原始文本', '识别到的病种', '状态'];
-  const rows = results.map((r: any, index: number) => [
+  const rows = results.map((r, index) => [
     index + 1,
     `"${r.originalText.replace(/"/g, '""')}"`,
     `"${(r.diseases || []).join('; ')}"`,
-    r.error ? `失败: ${r.error}` : '成功'
+    r.error ? `失败: ${r.error}` : '成功',
   ]);
 
   const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
@@ -230,7 +257,16 @@ export async function POST(request: NextRequest) {
 
         // 从前端接收配置参数
         const frontendConfig = formData.get('config') as string;
-        let parsedConfig: any = {};
+        interface FrontendConfig {
+          maxRetries?: number;
+          retryDelay?: number;
+          saveInterval?: number;
+          llmCallTimeout?: number;
+          concurrentBatchSize?: number;
+          heartbeatBatchInterval?: number;
+          model?: string;
+        }
+        let parsedConfig: FrontendConfig = {};
         try {
           if (frontendConfig) {
             parsedConfig = JSON.parse(frontendConfig);
@@ -322,20 +358,18 @@ export async function POST(request: NextRequest) {
 
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'total', count: texts.length })}\n\n`));
 
-        let existingResults: any[] = [];
+        let existingResults: ResultItem[] = [];
         let existingStats = { successCount: 0, failureCount: 0, totalDiseases: 0 };
-        
+
         if (resumeFromIndex > 0) {
           const tempData = await loadTempFile(fileId);
           if (tempData) {
-            // 兼容旧格式：如果包含results，从中提取统计信息
             if (tempData.results && tempData.results.length > 0) {
               existingResults = tempData.results;
-              existingStats.successCount = existingResults.filter((r: any) => !r.error).length;
-              existingStats.failureCount = existingResults.filter((r: any) => r.error).length;
-              existingStats.totalDiseases = existingResults.reduce((sum: number, r: any) => sum + (r.diseases?.length || 0), 0);
+              existingStats.successCount = existingResults.filter(r => !r.error).length;
+              existingStats.failureCount = existingResults.filter(r => r.error).length;
+              existingStats.totalDiseases = existingResults.reduce((sum, r) => sum + (r.diseases?.length || 0), 0);
             } else if (tempData.savedFiles && tempData.savedFiles.length > 0) {
-              // 新格式：只保存进度和统计信息
               existingStats.successCount = tempData.successCount || 0;
               existingStats.failureCount = tempData.failureCount || 0;
               existingStats.totalDiseases = tempData.totalDiseases || 0;
@@ -386,7 +420,7 @@ export async function POST(request: NextRequest) {
         let failureCount = existingStats.failureCount;
         let totalDiseases = existingStats.totalDiseases;
         
-        let currentBatch: any[] = [];
+        let currentBatch: ResultItem[] = [];
         let batchNumber = Math.floor(processedCount / SAVE_INTERVAL) + 1;
         let savedFiles: string[] = [];
 
@@ -405,17 +439,10 @@ export async function POST(request: NextRequest) {
 
             let lastError: Error | null = null;
             let fullResponse = '';
-            const retryHistory: any[] = [];
-            
-            // 注释掉DEBUG日志以减少IO操作，提升性能
-            // await logToFile(fileId, LogLevel.DEBUG, `开始处理第 ${index + 1} 条数据`, {
-            //   textPreview: text.substring(0, 50) + (text.length > 50 ? '...' : ''),
-            //   textLength: text.length
-            // }, controller);
-            
+            const retryHistory: LogDetails[] = [];
+
             for (let retry = 0; retry <= maxRetries; retry++) {
               try {
-                // 只在重试时记录日志，成功时不记录
                 if (retry > 0) {
                   await logToFile(fileId, LogLevel.INFO, `第 ${index + 1} 条数据 - 第 ${retry + 1} 次尝试`, {
                     retryAttempt: retry + 1,
@@ -441,14 +468,9 @@ export async function POST(request: NextRequest) {
                   
                   // 只在第一次成功时记录日志，避免大量日志
                   if (retry === 0) {
-                    const llmCallDuration = Date.now() - llmCallStart;
-                    // 注释掉每条数据的成功日志，减少IO操作
-                    // await logToFile(fileId, LogLevel.INFO, `第 ${index + 1} 条数据 - 第 ${retry + 1} 次尝试成功`, {
-                    //   duration: llmCallDuration,
-                    //   responseLength: fullResponse.length
-                    // }, controller);
+                    void (Date.now() - llmCallStart); // track duration if needed
                   }
-                  
+
                   lastError = null;
                   break;
                 } catch (error) {
@@ -665,8 +687,6 @@ export async function POST(request: NextRequest) {
         // 使用已经维护的计数器，避免遍历大型results数组
         // const successCount = results.filter(r => !r.error).length;
         // const failureCount = results.filter(r => r.error).length;
-        // const totalDiseases = results.reduce((sum, r) => sum + (r.diseases?.length || 0), 0);
-        
         await logToFile(fileId, LogLevel.INFO, '分析完成', {
           totalProcessed: processedCount,
           totalExpected: texts.length,

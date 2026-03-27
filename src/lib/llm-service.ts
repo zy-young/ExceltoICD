@@ -112,38 +112,49 @@ export class LLMService {
     messages: LLMMessage[],
     options: LLMOptions & { model: string }
   ): Promise<LLMResponse> {
-    const response = await fetch(`${this.provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: options.model,
-        messages: messages,
-        temperature: options.temperature ?? 0.3,
-        top_p: options.topP,
-        max_tokens: options.maxTokens,
-        stream: false,
-      }),
-    });
+    try {
+      const response = await fetch(`${this.provider.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: options.model,
+          messages: messages,
+          temperature: options.temperature ?? 0.3,
+          top_p: options.topP,
+          max_tokens: options.maxTokens,
+          stream: false,
+        }),
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`DeepSeek API error: ${response.status} - ${error}`);
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`DeepSeek API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        throw new Error(`DeepSeek API returned unexpected response format: ${JSON.stringify(data)}`);
+      }
+
+      return {
+        content,
+        model: data.model,
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens,
+          completionTokens: data.usage.completion_tokens,
+          totalTokens: data.usage.total_tokens,
+        } : undefined,
+      };
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(`DeepSeek API call failed: ${String(error)}`);
     }
-
-    const data = await response.json();
-
-    return {
-      content: data.choices[0].message.content,
-      model: data.model,
-      usage: data.usage ? {
-        promptTokens: data.usage.prompt_tokens,
-        completionTokens: data.usage.completion_tokens,
-        totalTokens: data.usage.total_tokens,
-      } : undefined,
-    };
   }
 
   /**
@@ -153,37 +164,48 @@ export class LLMService {
     messages: LLMMessage[],
     options: LLMOptions & { model: string }
   ): Promise<LLMResponse> {
-    const response = await fetch(`${this.provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: options.model,
-        messages: messages,
-        temperature: options.temperature ?? 0.3,
-        top_p: options.topP,
-        max_tokens: options.maxTokens,
-      }),
-    });
+    try {
+      const response = await fetch(`${this.provider.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: options.model,
+          messages: messages,
+          temperature: options.temperature ?? 0.3,
+          top_p: options.topP,
+          max_tokens: options.maxTokens,
+        }),
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Qwen API error: ${response.status} - ${error}`);
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Qwen API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        throw new Error(`Qwen API returned unexpected response format: ${JSON.stringify(data)}`);
+      }
+
+      return {
+        content,
+        model: data.model,
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens,
+          completionTokens: data.usage.completion_tokens,
+          totalTokens: data.usage.total_tokens,
+        } : undefined,
+      };
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(`Qwen API call failed: ${String(error)}`);
     }
-
-    const data = await response.json();
-
-    return {
-      content: data.choices[0].message.content,
-      model: data.model,
-      usage: data.usage ? {
-        promptTokens: data.usage.prompt_tokens,
-        completionTokens: data.usage.completion_tokens,
-        totalTokens: data.usage.total_tokens,
-      } : undefined,
-    };
   }
 
   /**
@@ -193,50 +215,61 @@ export class LLMService {
     messages: LLMMessage[],
     options: LLMOptions & { model: string }
   ): Promise<LLMResponse> {
-    // Gemini 使用不同的 API 格式
-    const systemInstruction = messages.find(m => m.role === 'system')?.content;
-    const userMessages = messages.filter(m => m.role !== 'system');
+    try {
+      // Gemini 使用不同的 API 格式
+      const systemInstruction = messages.find(m => m.role === 'system')?.content;
+      const userMessages = messages.filter(m => m.role !== 'system');
 
-    const response = await fetch(
-      `${this.provider.baseUrl}/models/${options.model}:generateContent?key=${this.apiKey}`,
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          contents: userMessages.map(m => ({
-            role: m.role === 'assistant' ? 'model' : 'user',
-            parts: [{ text: m.content }],
-          })),
-          systemInstruction: systemInstruction ? {
-            parts: [{ text: systemInstruction }],
-          } : undefined,
-          generationConfig: {
-            temperature: options.temperature ?? 0.3,
-            topP: options.topP,
-            maxOutputTokens: options.maxTokens,
+      const response = await fetch(
+        `${this.provider.baseUrl}/models/${options.model}:generateContent?key=${this.apiKey}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
           },
-        }),
+          body: JSON.stringify({
+            contents: userMessages.map(m => ({
+              role: m.role === 'assistant' ? 'model' : 'user',
+              parts: [{ text: m.content }],
+            })),
+            systemInstruction: systemInstruction ? {
+              parts: [{ text: systemInstruction }],
+            } : undefined,
+            generationConfig: {
+              temperature: options.temperature ?? 0.3,
+              topP: options.topP,
+              maxOutputTokens: options.maxTokens,
+            },
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`Gemini API error: ${response.status} - ${error}`);
       }
-    );
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`Gemini API error: ${response.status} - ${error}`);
+      const data = await response.json();
+      const content = data.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (typeof content !== 'string') {
+        throw new Error(`Gemini API returned unexpected response format: ${JSON.stringify(data)}`);
+      }
+
+      return {
+        content,
+        model: options.model,
+        usage: data.usageMetadata ? {
+          promptTokens: data.usageMetadata.promptTokenCount,
+          completionTokens: data.usageMetadata.candidatesTokenCount,
+          totalTokens: data.usageMetadata.totalTokenCount,
+        } : undefined,
+      };
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(`Gemini API call failed: ${String(error)}`);
     }
-
-    const data = await response.json();
-
-    return {
-      content: data.candidates[0].content.parts[0].text,
-      model: options.model,
-      usage: data.usageMetadata ? {
-        promptTokens: data.usageMetadata.promptTokenCount,
-        completionTokens: data.usageMetadata.candidatesTokenCount,
-        totalTokens: data.usageMetadata.totalTokenCount,
-      } : undefined,
-    };
   }
 
   /**
@@ -246,37 +279,48 @@ export class LLMService {
     messages: LLMMessage[],
     options: LLMOptions & { model: string }
   ): Promise<LLMResponse> {
-    const response = await fetch(`${this.provider.baseUrl}/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${this.apiKey}`,
-      },
-      body: JSON.stringify({
-        model: options.model,
-        messages: messages,
-        temperature: options.temperature ?? 0.3,
-        top_p: options.topP,
-        max_tokens: options.maxTokens,
-      }),
-    });
+    try {
+      const response = await fetch(`${this.provider.baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: options.model,
+          messages: messages,
+          temperature: options.temperature ?? 0.3,
+          top_p: options.topP,
+          max_tokens: options.maxTokens,
+        }),
+      });
 
-    if (!response.ok) {
-      const error = await response.text();
-      throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+      if (!response.ok) {
+        const error = await response.text();
+        throw new Error(`OpenAI API error: ${response.status} - ${error}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      if (typeof content !== 'string') {
+        throw new Error(`OpenAI API returned unexpected response format: ${JSON.stringify(data)}`);
+      }
+
+      return {
+        content,
+        model: data.model,
+        usage: data.usage ? {
+          promptTokens: data.usage.prompt_tokens,
+          completionTokens: data.usage.completion_tokens,
+          totalTokens: data.usage.total_tokens,
+        } : undefined,
+      };
+    } catch (error) {
+      if (error instanceof Error) {
+        throw error;
+      }
+      throw new Error(`OpenAI API call failed: ${String(error)}`);
     }
-
-    const data = await response.json();
-
-    return {
-      content: data.choices[0].message.content,
-      model: data.model,
-      usage: data.usage ? {
-        promptTokens: data.usage.prompt_tokens,
-        completionTokens: data.usage.completion_tokens,
-        totalTokens: data.usage.total_tokens,
-      } : undefined,
-    };
   }
 
   /**

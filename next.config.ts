@@ -14,6 +14,8 @@ const nextConfig: NextConfig = {
       },
     ],
   },
+  // 禁用 React Strict Mode，减少不必要的重新渲染
+  reactStrictMode: false,
 };
 
 export default nextConfig;

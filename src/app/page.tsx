@@ -144,6 +144,96 @@ export default function DiseaseExtractor() {
   const lastDataTimeRef = useRef<number>(Date.now());
   const timeoutWarningRef = useRef<NodeJS.Timeout | null>(null);
 
+  // 组件卸载时清理资源
+  useEffect(() => {
+    return () => {
+      // 清理 AbortController
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+      // 清理超时定时器
+      if (timeoutWarningRef.current) {
+        clearTimeout(timeoutWarningRef.current);
+        timeoutWarningRef.current = null;
+      }
+    };
+  }, []);
+
+  // 页面加载时恢复状态
+  useEffect(() => {
+    try {
+      const savedState = sessionStorage.getItem('disease-extractor-state');
+      if (savedState) {
+        const state = JSON.parse(savedState);
+        // 恢复状态
+        if (state.excelHeaders) setExcelHeaders(state.excelHeaders);
+        if (state.selectedColumn) setSelectedColumn(state.selectedColumn);
+        if (state.results) setResults(state.results);
+        if (state.progress) setProgress(state.progress);
+        if (state.elapsed) setElapsed(state.elapsed);
+        if (state.elapsedFormatted) setElapsedFormatted(state.elapsedFormatted);
+        if (state.fileId) setFileId(state.fileId);
+        if (state.logs) setLogs(state.logs);
+        if (state.selectedTemplate) setSelectedTemplate(state.selectedTemplate);
+        if (state.customSystemPrompt) setCustomSystemPrompt(state.customSystemPrompt);
+        if (state.customUserPrompt) setCustomUserPrompt(state.customUserPrompt);
+
+        console.log('✅ 已恢复页面状态');
+      }
+
+      // 恢复上传的文件
+      const fileData = sessionStorage.getItem('uploaded-file-data');
+      const fileName = sessionStorage.getItem('uploaded-file-name');
+      const fileType = sessionStorage.getItem('uploaded-file-type');
+
+      if (fileData && fileName) {
+        try {
+          // 将 Base64 转回 File 对象
+          fetch(fileData)
+            .then(res => res.blob())
+            .then(blob => {
+              const restoredFile = new File([blob], fileName, { type: fileType || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' });
+              setFile(restoredFile);
+              console.log('✅ 已恢复上传的文件:', fileName);
+            })
+            .catch(error => {
+              console.error('恢复文件失败:', error);
+            });
+        } catch (error) {
+          console.error('恢复文件失败:', error);
+        }
+      }
+    } catch (error) {
+      console.error('恢复状态失败:', error);
+    }
+  }, []);
+
+  // 自动保存状态到 sessionStorage（当关键状态变化时）
+  useEffect(() => {
+    if (results.length > 0 || excelHeaders.length > 0) {
+      try {
+        const state = {
+          excelHeaders,
+          selectedColumn,
+          results,
+          progress,
+          elapsed,
+          elapsedFormatted,
+          fileId,
+          logs,
+          selectedTemplate,
+          customSystemPrompt,
+          customUserPrompt,
+          savedAt: Date.now(),
+        };
+        sessionStorage.setItem('disease-extractor-state', JSON.stringify(state));
+      } catch (error) {
+        console.error('保存状态失败:', error);
+      }
+    }
+  }, [results, excelHeaders, selectedColumn, progress, elapsed, elapsedFormatted, fileId, logs, selectedTemplate, customSystemPrompt, customUserPrompt]);
+
   // 保存历史记录到LocalStorage
   const saveHistory = (status: 'completed' | 'interrupted' | 'error') => {
     const historyRecord = {
@@ -209,7 +299,7 @@ export default function DiseaseExtractor() {
         setError('请选择 Excel 文件 (.xlsx 或 .xls)');
         return;
       }
-      
+
       try {
         // 读取 Excel 文件获取列名
         const arrayBuffer = await selectedFile.arrayBuffer();
@@ -217,16 +307,31 @@ export default function DiseaseExtractor() {
         const sheetName = workbook.SheetNames[0];
         const worksheet = workbook.Sheets[sheetName];
         const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 }) as string[][];
-        
+
         if (jsonData.length > 0) {
           setExcelHeaders(jsonData[0]);
         }
-        
+
         setFile(selectedFile);
         setError('');
         setResults([]);
         setSelectedColumn('');
         setProgress({ processed: 0, total: 0, percentage: 0 });
+
+        // 将文件内容转为 Base64 存储到 sessionStorage
+        try {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const base64 = reader.result as string;
+            sessionStorage.setItem('uploaded-file-data', base64);
+            sessionStorage.setItem('uploaded-file-name', selectedFile.name);
+            sessionStorage.setItem('uploaded-file-type', selectedFile.type);
+            console.log('✅ 文件已保存到 sessionStorage');
+          };
+          reader.readAsDataURL(selectedFile);
+        } catch (error) {
+          console.error('保存文件失败:', error);
+        }
       } catch (err) {
         setError('文件读取失败，请检查文件格式');
         console.error(err);
@@ -256,11 +361,23 @@ export default function DiseaseExtractor() {
     if (!result) return;
 
     // 设置重试状态
-    setResults(prev => prev.map((r, i) => 
+    setResults(prev => prev.map((r, i) =>
       i === index ? { ...r, isRetrying: true, error: undefined } : r
     ));
 
     try {
+      // 从 localStorage 读取配置
+      const apiKey = localStorage.getItem('coze_api_key') || '';
+      let config: any = {};
+      try {
+        const savedConfig = localStorage.getItem('coze_settings');
+        if (savedConfig) {
+          config = JSON.parse(savedConfig);
+        }
+      } catch (error) {
+        console.error('读取配置失败:', error);
+      }
+
       const response = await fetch('/api/retry', {
         method: 'POST',
         headers: {
@@ -270,6 +387,8 @@ export default function DiseaseExtractor() {
           text: result.originalText,
           systemPrompt: customSystemPrompt,
           userPrompt: customUserPrompt,
+          apiKey: apiKey || config.apiKey,
+          model: config.model || 'coze/deepseek-v3-2-251201',
         }),
       });
 

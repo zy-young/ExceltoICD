@@ -19,8 +19,6 @@ export interface ModelInfo {
   name: string;
   description: string;
   contextLength?: number;
-  inputPrice?: number; // per 1K tokens
-  outputPrice?: number; // per 1K tokens
 }
 
 /**
@@ -36,26 +34,11 @@ export const MODEL_PROVIDERS: Record<string, ModelProvider> = {
     requiresSDK: true,
     defaultModel: 'deepseek-v3-2-251201',
     models: [
-      {
-        id: 'deepseek-v3-2-251201',
-        name: 'DeepSeek V3',
-        description: '高性能大模型，适合复杂任务',
-      },
-      {
-        id: 'doubao-seed-1-8-251228',
-        name: '豆包 Seed 1.8',
-        description: '轻量级模型，响应速度快',
-      },
-      {
-        id: 'gpt-4',
-        name: 'GPT-4',
-        description: 'OpenAI 旗舰模型',
-      },
-      {
-        id: 'gpt-3.5-turbo',
-        name: 'GPT-3.5 Turbo',
-        description: 'OpenAI 高性价比模型',
-      },
+      { id: 'deepseek-v3-2-251201', name: 'DeepSeek V3', description: '高性能大模型，适合复杂任务', contextLength: 64000 },
+      { id: 'doubao-seed-1-8-251228', name: '豆包 Seed 1.8', description: '字节跳动轻量级模型，响应速度快', contextLength: 32000 },
+      { id: 'doubao-1-5-pro-32k-250115', name: '豆包 1.5 Pro 32K', description: '字节跳动旗舰模型', contextLength: 32000 },
+      { id: 'doubao-pro-32k', name: '豆包 Pro 32K', description: '字节跳动高性能模型', contextLength: 32000 },
+      { id: 'doubao-lite-32k', name: '豆包 Lite 32K', description: '字节跳动轻量模型', contextLength: 32000 },
     ],
   },
   deepseek: {
@@ -66,22 +49,8 @@ export const MODEL_PROVIDERS: Record<string, ModelProvider> = {
     authType: 'bearer',
     defaultModel: 'deepseek-chat',
     models: [
-      {
-        id: 'deepseek-chat',
-        name: 'DeepSeek Chat',
-        description: '通用对话模型',
-        contextLength: 128000,
-        inputPrice: 0.001, // ¥ per 1K tokens
-        outputPrice: 0.002,
-      },
-      {
-        id: 'deepseek-reasoner',
-        name: 'DeepSeek Reasoner',
-        description: '推理模型，适合复杂逻辑',
-        contextLength: 64000,
-        inputPrice: 0.001,
-        outputPrice: 0.002,
-      },
+      { id: 'deepseek-chat', name: 'DeepSeek Chat', description: '最新通用对话模型（DeepSeek-V3）', contextLength: 64000 },
+      { id: 'deepseek-reasoner', name: 'DeepSeek Reasoner', description: '推理模型（DeepSeek-R1）', contextLength: 64000 },
     ],
   },
   qwen: {
@@ -90,32 +59,16 @@ export const MODEL_PROVIDERS: Record<string, ModelProvider> = {
     description: '阿里云通义千问 API，使用 DashScope API Key',
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     authType: 'bearer',
-    defaultModel: 'qwen-turbo',
+    defaultModel: 'qwen-plus',
     models: [
-      {
-        id: 'qwen-turbo',
-        name: 'Qwen Turbo',
-        description: '高速响应模型',
-        contextLength: 8000,
-        inputPrice: 0.0008,
-        outputPrice: 0.0008,
-      },
-      {
-        id: 'qwen-plus',
-        name: 'Qwen Plus',
-        description: '均衡性能模型',
-        contextLength: 32000,
-        inputPrice: 0.004,
-        outputPrice: 0.004,
-      },
-      {
-        id: 'qwen-max',
-        name: 'Qwen Max',
-        description: '旗舰模型',
-        contextLength: 32000,
-        inputPrice: 0.04,
-        outputPrice: 0.04,
-      },
+      { id: 'qwen-max', name: 'Qwen Max', description: '旗舰模型，最强能力', contextLength: 32000 },
+      { id: 'qwen-plus', name: 'Qwen Plus', description: '均衡性能，推荐日常使用', contextLength: 131072 },
+      { id: 'qwen-turbo', name: 'Qwen Turbo', description: '高速响应，性价比高', contextLength: 131072 },
+      { id: 'qwen-long', name: 'Qwen Long', description: '超长上下文模型', contextLength: 1000000 },
+      { id: 'qwen2.5-72b-instruct', name: 'Qwen2.5 72B', description: 'Qwen2.5 开源模型', contextLength: 131072 },
+      { id: 'qwen2.5-32b-instruct', name: 'Qwen2.5 32B', description: 'Qwen2.5 中型模型', contextLength: 131072 },
+      { id: 'qwen2.5-14b-instruct', name: 'Qwen2.5 14B', description: 'Qwen2.5 轻量模型', contextLength: 131072 },
+      { id: 'qwen2.5-7b-instruct', name: 'Qwen2.5 7B', description: 'Qwen2.5 小型模型', contextLength: 131072 },
     ],
   },
   gemini: {
@@ -124,20 +77,14 @@ export const MODEL_PROVIDERS: Record<string, ModelProvider> = {
     description: 'Google Gemini API，使用 Google AI Studio API Key',
     baseUrl: 'https://generativelanguage.googleapis.com/v1beta',
     authType: 'custom',
-    defaultModel: 'gemini-1.5-pro',
+    defaultModel: 'gemini-2.0-flash-exp',
     models: [
-      {
-        id: 'gemini-1.5-pro',
-        name: 'Gemini 1.5 Pro',
-        description: 'Google 高性能模型',
-        contextLength: 2800000,
-      },
-      {
-        id: 'gemini-1.5-flash',
-        name: 'Gemini 1.5 Flash',
-        description: 'Google 高速模型',
-        contextLength: 1000000,
-      },
+      { id: 'gemini-2.0-flash-exp', name: 'Gemini 2.0 Flash Exp', description: '最新实验版本，性能最强', contextLength: 1048576 },
+      { id: 'gemini-2.0-flash-thinking-exp-01-21', name: 'Gemini 2.0 Flash Thinking', description: '思维链推理模型', contextLength: 32767 },
+      { id: 'gemini-exp-1206', name: 'Gemini Exp 1206', description: '实验版旗舰模型', contextLength: 2097152 },
+      { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro', description: '稳定版高性能模型', contextLength: 2097152 },
+      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', description: '快速响应模型', contextLength: 1048576 },
+      { id: 'gemini-1.5-flash-8b', name: 'Gemini 1.5 Flash 8B', description: '轻量高速模型', contextLength: 1048576 },
     ],
   },
   openai: {
@@ -146,32 +93,16 @@ export const MODEL_PROVIDERS: Record<string, ModelProvider> = {
     description: 'OpenAI 官方 API，使用 OpenAI API Key',
     baseUrl: 'https://api.openai.com/v1',
     authType: 'bearer',
-    defaultModel: 'gpt-3.5-turbo',
+    defaultModel: 'gpt-4o',
     models: [
-      {
-        id: 'gpt-4o',
-        name: 'GPT-4o',
-        description: 'OpenAI 最新旗舰模型',
-        contextLength: 128000,
-        inputPrice: 0.005,
-        outputPrice: 0.015,
-      },
-      {
-        id: 'gpt-4-turbo',
-        name: 'GPT-4 Turbo',
-        description: 'OpenAI 高性能模型',
-        contextLength: 128000,
-        inputPrice: 0.01,
-        outputPrice: 0.03,
-      },
-      {
-        id: 'gpt-3.5-turbo',
-        name: 'GPT-3.5 Turbo',
-        description: 'OpenAI 高性价比模型',
-        contextLength: 16385,
-        inputPrice: 0.0005,
-        outputPrice: 0.0015,
-      },
+      { id: 'gpt-4o', name: 'GPT-4o', description: '多模态旗舰模型', contextLength: 128000 },
+      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', description: '轻量高速模型', contextLength: 128000 },
+      { id: 'gpt-4-turbo', name: 'GPT-4 Turbo', description: 'GPT-4 高速版本', contextLength: 128000 },
+      { id: 'gpt-4', name: 'GPT-4', description: 'GPT-4 标准版', contextLength: 8192 },
+      { id: 'gpt-3.5-turbo', name: 'GPT-3.5 Turbo', description: '经典高性价比模型', contextLength: 16385 },
+      { id: 'o1', name: 'o1', description: '推理模型，适合复杂问题', contextLength: 200000 },
+      { id: 'o1-mini', name: 'o1-mini', description: '轻量推理模型', contextLength: 128000 },
+      { id: 'o1-preview', name: 'o1-preview', description: '推理模型预览版', contextLength: 128000 },
     ],
   },
 };
@@ -181,13 +112,11 @@ export const MODEL_PROVIDERS: Record<string, ModelProvider> = {
  */
 export function getAllModels(): Array<{ provider: string; model: ModelInfo }> {
   const models: Array<{ provider: string; model: ModelInfo }> = [];
-  
   for (const [providerId, provider] of Object.entries(MODEL_PROVIDERS)) {
     for (const model of provider.models) {
       models.push({ provider: providerId, model });
     }
   }
-  
   return models;
 }
 
@@ -195,16 +124,7 @@ export function getAllModels(): Array<{ provider: string; model: ModelInfo }> {
  * 获取指定提供商的模型
  */
 export function getModelsByProvider(providerId: string): ModelInfo[] {
-  const provider = MODEL_PROVIDERS[providerId];
-  return provider?.models || [];
-}
-
-/**
- * 获取模型信息
- */
-export function getModelInfo(providerId: string, modelId: string): ModelInfo | null {
-  const provider = MODEL_PROVIDERS[providerId];
-  return provider?.models.find(m => m.id === modelId) || null;
+  return MODEL_PROVIDERS[providerId]?.models || [];
 }
 
 /**
@@ -218,9 +138,12 @@ export function getProviderInfo(providerId: string): ModelProvider | null {
  * 解析模型 ID（格式：providerId/modelId）
  */
 export function parseModelId(modelId: string): { providerId: string; modelName: string } | null {
-  const parts = modelId.split('/');
-  if (parts.length === 2) {
-    return { providerId: parts[0], modelName: parts[1] };
+  const slashIndex = modelId.indexOf('/');
+  if (slashIndex > 0) {
+    return {
+      providerId: modelId.slice(0, slashIndex),
+      modelName: modelId.slice(slashIndex + 1),
+    };
   }
   return null;
 }

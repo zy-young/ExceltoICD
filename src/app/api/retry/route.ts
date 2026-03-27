@@ -40,12 +40,26 @@ function parseDiseases(response: string): string[] {
 
 export async function POST(request: NextRequest) {
   try {
-    const { text, systemPrompt, userPrompt, modelId, apiKey } = await request.json();
+    const body = await request.json();
+    const { text, systemPrompt, userPrompt } = body;
 
     if (!text) {
       return NextResponse.json(
         {
           error: '缺少文本内容',
+        },
+        { status: 400 }
+      );
+    }
+
+    // 从 localStorage 读取配置（前端会传递）
+    const apiKey = body.apiKey || '';
+    const modelId = body.modelId || body.model || 'coze/deepseek-v3-2-251201';
+
+    if (!apiKey) {
+      return NextResponse.json(
+        {
+          error: '缺少 API Key',
         },
         { status: 400 }
       );
@@ -75,11 +89,8 @@ export async function POST(request: NextRequest) {
       finalUserPrompt += `\n\n额外要求：${userPrompt}`;
     }
 
-    // 使用配置的模型或默认模型
-    const actualModelId = modelId || 'coze/deepseek-v3-2-251201';
-    
     // 创建 LLM 服务
-    const llmService = createLLMService(actualModelId, apiKey);
+    const llmService = createLLMService(modelId, apiKey);
 
     // 重试逻辑
     let lastError: Error | null = null;
