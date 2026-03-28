@@ -34,6 +34,7 @@ interface ResultData {
   isRetrying?: boolean;
   processingTime?: number;  // 处理时间（毫秒）
   processingTimeFormatted?: string;  // 格式化的处理时间
+  index?: number;  // 原始行索引（从1开始）
   // 分类后的疾病
   classifiedDiseases?: {
     fixed: Record<string, string[]>;  // 固定疾病对应的具体名称列表
@@ -112,6 +113,7 @@ const PROMPT_TEMPLATES = {
 export default function DiseaseExtractor() {
   const [file, setFile] = useState<File | null>(null);
   const [excelHeaders, setExcelHeaders] = useState<string[]>([]);
+  const [excelRows, setExcelRows] = useState<any[][]>([]); // 保存原始Excel的所有行数据
   const [selectedColumn, setSelectedColumn] = useState<string>('');
   const [results, setResults] = useState<ResultData[]>([]);
   const [isLoading, setIsLoading] = useState(false);
@@ -119,7 +121,7 @@ export default function DiseaseExtractor() {
   const [progress, setProgress] = useState({ processed: 0, total: 0, percentage: 0 });
   const [elapsed, setElapsed] = useState<number>(0); // 运行时长（毫秒）
   const [elapsedFormatted, setElapsedFormatted] = useState<string>(''); // 格式化后的运行时长
-  
+
   // 自动保存和断点续传相关状态
   const [fileId, setFileId] = useState<string>('');
   const [autoSaveCount, setAutoSaveCount] = useState<number>(0);
@@ -310,6 +312,7 @@ export default function DiseaseExtractor() {
 
         if (jsonData.length > 0) {
           setExcelHeaders(jsonData[0]);
+          setExcelRows(jsonData.slice(1)); // 保存所有行数据（不包括表头）
         }
 
         setFile(selectedFile);
@@ -515,7 +518,7 @@ export default function DiseaseExtractor() {
         formData.append('userPrompt', customUserPrompt);
       }
 
-      const response = await fetch('/api/analyze', {
+      const response = await fetch('/api/analyze-batch', {
         method: 'POST',
         body: formData,
         signal: abortControllerRef.current.signal,
@@ -630,6 +633,7 @@ export default function DiseaseExtractor() {
                   setResults(prev => {
                     const classified = classifyDiseases(data.diseases || []);
                     return [...prev, {
+                      index: data.index, // 保存原始行索引
                       originalText: data.originalText,
                       diseases: data.diseases,
                       error: data.error,
@@ -701,30 +705,66 @@ export default function DiseaseExtractor() {
   const handleDownloadCSV = () => {
     if (results.length === 0) return;
 
-    // CSV 表头：序号、原始文本、每个器官、其他、状态
-    const headers = ['序号', '原始文本', ...FIXED_ORGANS, '其他', '状态'];
-    
-    const rows = results.map((r, index) => [
-      index + 1,
-      `"${r.originalText.replace(/"/g, '""')}"`,
-      ...FIXED_ORGANS.map(organ => {
-        const diseaseList = r.classifiedDiseases?.fixed?.[organ];
-        return diseaseList && diseaseList.length > 0 
-          ? `"${diseaseList.join('; ')}"` 
-          : '';
-      }),
-      `"${r.classifiedDiseases?.others?.join('; ') || ''}"`,
-      r.error ? '失败' : '成功'
-    ]);
+    // 如果有原始Excel数据，保留所有原始列
+    if (excelHeaders.length > 0 && excelRows.length > 0) {
+      // CSV 表头：原始所有列 + 识别的病种列
+      const headers = [...excelHeaders, ...FIXED_ORGANS, '其他', '状态'];
 
-    const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
-    const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `病种识别结果_${new Date().toISOString().slice(0, 10)}.csv`;
-    link.click();
-    URL.revokeObjectURL(url);
+      const rows = results.map((r) => {
+        // 找到对应的原始行（index从1开始，excelRows从0开始）
+        const originalRow = excelRows[r.index! - 1] || [];
+
+        // 原始列数据 + 识别的病种列
+        return [
+          ...originalRow.map(cell => {
+            const cellStr = cell?.toString() || '';
+            return `"${cellStr.replace(/"/g, '""')}"`;
+          }),
+          ...FIXED_ORGANS.map(organ => {
+            const diseaseList = r.classifiedDiseases?.fixed?.[organ];
+            return diseaseList && diseaseList.length > 0
+              ? `"${diseaseList.join('; ')}"`
+              : '';
+          }),
+          `"${r.classifiedDiseases?.others?.join('; ') || ''}"`,
+          r.error ? '失败' : '成功'
+        ];
+      });
+
+      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+      const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `病种识别结果_${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } else {
+      // 兼容旧逻辑：如果没有原始数据，使用旧的格式
+      const headers = ['序号', '原始文本', ...FIXED_ORGANS, '其他', '状态'];
+
+      const rows = results.map((r, index) => [
+        index + 1,
+        `"${r.originalText.replace(/"/g, '""')}"`,
+        ...FIXED_ORGANS.map(organ => {
+          const diseaseList = r.classifiedDiseases?.fixed?.[organ];
+          return diseaseList && diseaseList.length > 0
+            ? `"${diseaseList.join('; ')}"`
+            : '';
+        }),
+        `"${r.classifiedDiseases?.others?.join('; ') || ''}"`,
+        r.error ? '失败' : '成功'
+      ]);
+
+      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+      const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `病种识别结果_${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    }
   };
 
   // 下载日志文件
