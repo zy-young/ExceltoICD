@@ -731,7 +731,7 @@ export default function DiseaseExtractor() {
         ];
       });
 
-      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\r\n');
       const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
@@ -756,7 +756,7 @@ export default function DiseaseExtractor() {
         r.error ? '失败' : '成功'
       ]);
 
-      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\n');
+      const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\r\n');
       const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
