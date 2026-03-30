@@ -170,6 +170,7 @@ export default function DiseaseExtractor() {
         const state = JSON.parse(savedState);
         // 恢复状态
         if (state.excelHeaders) setExcelHeaders(state.excelHeaders);
+        if (state.excelRows) setExcelRows(state.excelRows);  // 添加恢复 excelRows
         if (state.selectedColumn) setSelectedColumn(state.selectedColumn);
         if (state.results) setResults(state.results);
         if (state.progress) setProgress(state.progress);
@@ -182,6 +183,8 @@ export default function DiseaseExtractor() {
         if (state.customUserPrompt) setCustomUserPrompt(state.customUserPrompt);
 
         console.log('✅ 已恢复页面状态');
+        console.log('恢复的 excelHeaders 数量:', state.excelHeaders?.length || 0);
+        console.log('恢复的 excelRows 数量:', state.excelRows?.length || 0);
       }
 
       // 恢复上传的文件
@@ -217,6 +220,7 @@ export default function DiseaseExtractor() {
       try {
         const state = {
           excelHeaders,
+          excelRows,  // 添加 excelRows
           selectedColumn,
           results,
           progress,
@@ -234,7 +238,7 @@ export default function DiseaseExtractor() {
         console.error('保存状态失败:', error);
       }
     }
-  }, [results, excelHeaders, selectedColumn, progress, elapsed, elapsedFormatted, fileId, logs, selectedTemplate, customSystemPrompt, customUserPrompt]);
+  }, [results, excelHeaders, excelRows, selectedColumn, progress, elapsed, elapsedFormatted, fileId, logs, selectedTemplate, customSystemPrompt, customUserPrompt]);
 
   // 保存历史记录到LocalStorage
   const saveHistory = (status: 'completed' | 'interrupted' | 'error') => {
@@ -705,14 +709,27 @@ export default function DiseaseExtractor() {
   const handleDownloadCSV = () => {
     if (results.length === 0) return;
 
+    // 调试日志
+    console.log('=== CSV 导出调试信息 ===');
+    console.log('excelHeaders:', excelHeaders);
+    console.log('excelHeaders.length:', excelHeaders.length);
+    console.log('excelRows.length:', excelRows.length);
+    console.log('results.length:', results.length);
+
     // 如果有原始Excel数据，保留所有原始列
     if (excelHeaders.length > 0 && excelRows.length > 0) {
+      console.log('✅ 使用原始Excel数据导出');
       // CSV 表头：原始所有列 + 识别的病种列
       const headers = [...excelHeaders, ...FIXED_ORGANS, '其他', '状态'];
+      console.log('CSV 表头:', headers);
 
-      const rows = results.map((r) => {
+      const rows = results.map((r, idx) => {
         // 找到对应的原始行（index从1开始，excelRows从0开始）
         const originalRow = excelRows[r.index! - 1] || [];
+
+        if (idx === 0) {
+          console.log('第一行数据 - r.index:', r.index, 'originalRow:', originalRow);
+        }
 
         // 原始列数据 + 识别的病种列
         return [
@@ -731,6 +748,9 @@ export default function DiseaseExtractor() {
         ];
       });
 
+      console.log('CSV 数据行数:', rows.length);
+      console.log('第一行数据列数:', rows[0]?.length);
+
       const csvContent = [headers.join(','), ...rows.map(row => row.join(','))].join('\r\n');
       const blob = new Blob(['\ufeff' + csvContent], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
@@ -740,6 +760,7 @@ export default function DiseaseExtractor() {
       link.click();
       URL.revokeObjectURL(url);
     } else {
+      console.log('⚠️ 使用兼容模式导出（没有原始Excel数据）');
       // 兼容旧逻辑：如果没有原始数据，使用旧的格式
       const headers = ['序号', '原始文本', ...FIXED_ORGANS, '其他', '状态'];
 
