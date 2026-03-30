@@ -92,6 +92,10 @@ Desktop.ini
 # TypeScript
 *.tsbuildinfo
 
+# Lock files (using pnpm)
+package-lock.json
+yarn.lock
+
 # Misc
 .vercel
 .turbo
