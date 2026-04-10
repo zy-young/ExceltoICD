@@ -29,7 +29,7 @@ interface ResultData {
   diseases: string[];
   error?: string;
   errorType?: string;  // 错误类型
-  errorDetails?: any;  // 详细的错误信息
+  errorDetails?: unknown;  // 详细的错误信息
   retryable?: boolean;
   isRetrying?: boolean;
   processingTime?: number;  // 处理时间（毫秒）
@@ -375,7 +375,7 @@ export default function DiseaseExtractor() {
     try {
       // 从 localStorage 读取配置
       const apiKey = localStorage.getItem('coze_api_key') || '';
-      let config: any = {};
+      let config: Record<string, unknown> = {};
       try {
         const savedConfig = localStorage.getItem('coze_settings');
         if (savedConfig) {
@@ -502,7 +502,7 @@ export default function DiseaseExtractor() {
       formData.append('apiKey', apiKey);
       
       // 从 localStorage 读取完整配置
-      let config: any = {};
+      let config: Record<string, unknown> = {};
       try {
         const savedConfig = localStorage.getItem('coze_settings');
         if (savedConfig) {
@@ -514,7 +514,7 @@ export default function DiseaseExtractor() {
       
       // 如果 localStorage 中没有 API Key 但有配置中的 API Key，使用配置中的
       if (!apiKey && config.apiKey) {
-        formData.append('apiKey', config.apiKey);
+        formData.append('apiKey', String(config.apiKey));
       }
       
       // 传递配置给后端

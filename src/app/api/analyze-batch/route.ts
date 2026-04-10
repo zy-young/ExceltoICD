@@ -243,7 +243,7 @@ const saveResultsToExcel = async (
   results: ResultItem[],
   batchNumber: number,
   fileId: string,
-  originalRows?: any[][],
+  originalRows?: unknown[][],
   originalHeaders?: string[],
   textToRowIndexMap?: number[]
 ) => {
@@ -264,7 +264,7 @@ const saveResultsToExcel = async (
       // 原始列数据 + 识别的病种列
       return [
         ...originalRow.map(cell => {
-          const cellStr = cell?.toString() || '';
+          const cellStr = cell != null ? String(cell) : '';
           return `"${cellStr.replace(/"/g, '""')}"`;
         }),
         ...FIXED_ORGANS.map(organ => {
@@ -370,16 +370,31 @@ function parseBatchDiseases(response: string, batchSize: number): string[][] {
   return results;
 }
 
+interface FrontendConfig {
+  maxRetries?: number;
+  retryDelay?: number;
+  saveInterval?: number;
+  llmCallTimeout?: number;
+  concurrentBatchSize?: number;
+  heartbeatBatchInterval?: number;
+  model?: string;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+}
+
 export async function POST(request: NextRequest) {
   const encoder = new TextEncoder();
-  
+
   const stream = new ReadableStream({
     async start(controller) {
       // 声明变量在try块之外，以便catch块可以访问
       let fileId: string = 'unknown';
       let processedCount: number = 0;
       let texts: string[] = [];
-      
+
       try {
         const formData = await request.formData();
         const file = formData.get('file') as File;
@@ -392,20 +407,6 @@ export async function POST(request: NextRequest) {
 
         // 从前端接收配置参数
         const frontendConfig = formData.get('config') as string;
-        interface FrontendConfig {
-          maxRetries?: number;
-          retryDelay?: number;
-          saveInterval?: number;
-          llmCallTimeout?: number;
-          concurrentBatchSize?: number;
-          heartbeatBatchInterval?: number;
-          model?: string;
-          temperature?: number;
-          topP?: number;
-          maxTokens?: number;
-          frequencyPenalty?: number;
-          presencePenalty?: number;
-        }
         let parsedConfig: FrontendConfig = {};
         try {
           if (frontendConfig) {
@@ -713,8 +714,6 @@ ${textList}`;
                   }, controller);
                 }
                 
-                const llmCallStart = Date.now();
-                
                 try {
                   // 使用统一的 LLM 服务
                   const response = await llmService.invoke(
@@ -732,11 +731,6 @@ ${textList}`;
                   );
                   
                   fullResponse = response.content || '';
-                  
-                  // 只在第一次成功时记录日志，避免大量日志
-                  if (retry === 0) {
-                    void (Date.now() - llmCallStart); // track duration if needed
-                  }
 
                   lastError = null;
                   break;

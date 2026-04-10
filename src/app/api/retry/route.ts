@@ -44,9 +44,23 @@ function parseDiseases(response: string): string[] {
   return diseases;
 }
 
+interface RetryRequestBody {
+  text?: string;
+  systemPrompt?: string;
+  userPrompt?: string;
+  apiKey?: string;
+  modelId?: string;
+  model?: string;
+  temperature?: number;
+  topP?: number;
+  maxTokens?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    const body = await request.json() as RetryRequestBody;
     const { text, systemPrompt, userPrompt } = body;
 
     if (!text) {
