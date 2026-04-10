@@ -8,7 +8,13 @@ const MAX_RETRIES = 3;
 const RETRY_DELAY = 1000;
 
 function parseDiseases(response: string): string[] {
-  const cleanedResponse = response.trim();
+  // 去掉可能的破折号/星号前缀（如 "- null" 或 "* null"）
+  const cleanedResponse = response.trim().replace(/^[-*]\s*/, '');
+
+  // 检查是否为 null（模糊无法识别）
+  if (cleanedResponse.toLowerCase() === 'null' || cleanedResponse.toLowerCase() === '[null]') {
+    return ['null'];
+  }
 
   // 检查是否为"未识别到病种"
   if (cleanedResponse === '未识别到病种' || cleanedResponse.includes('未识别到')) {
@@ -16,9 +22,11 @@ function parseDiseases(response: string): string[] {
   }
 
   // 尝试提取方括号中的内容
-  const bracketMatch = cleanedResponse.match(/\[(.*)\]/);
+  const bracketMatch = cleanedResponse.match(/\[(.*)\]/s);
   if (bracketMatch) {
-    const diseases = bracketMatch[1]
+    const inner = bracketMatch[1].trim();
+    if (inner === '') return [];
+    const diseases = inner
       .split(',')
       .map(d => d.trim())
       .filter(d => d.length > 0);
@@ -26,10 +34,8 @@ function parseDiseases(response: string): string[] {
   }
 
   // 如果没有方括号，尝试直接解析
-  // 移除可能的序号前缀
   const withoutPrefix = cleanedResponse.replace(/^\d+[\.\、]\s*/, '');
 
-  // 按逗号、顿号、分号等分隔符分割
   const diseases = withoutPrefix
     .split(/[,，、;；]/)
     .map(d => d.trim())
@@ -55,6 +61,11 @@ export async function POST(request: NextRequest) {
     // 从 localStorage 读取配置（前端会传递）
     const apiKey = body.apiKey || '';
     const modelId = body.modelId || body.model || 'coze/deepseek-v3-2-251201';
+    const llmTemperature = body.temperature ?? 0.3;
+    const llmTopP = body.topP;
+    const llmMaxTokens = body.maxTokens || undefined;
+    const llmFrequencyPenalty = body.frequencyPenalty;
+    const llmPresencePenalty = body.presencePenalty;
 
     if (!apiKey) {
       return NextResponse.json(
@@ -104,7 +115,11 @@ export async function POST(request: NextRequest) {
             { role: 'user', content: finalUserPrompt },
           ],
           {
-            temperature: 0.3,
+            temperature: llmTemperature,
+            topP: llmTopP,
+            maxTokens: llmMaxTokens,
+            frequencyPenalty: llmFrequencyPenalty,
+            presencePenalty: llmPresencePenalty,
           }
         );
 

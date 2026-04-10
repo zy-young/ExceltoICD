@@ -21,6 +21,12 @@ interface SettingsConfig {
   retryDelay: number;
   saveInterval: number;
   heartbeatBatchInterval: number;
+  // LLM 生成参数
+  temperature: number;
+  topP: number;
+  maxTokens: number;
+  frequencyPenalty: number;
+  presencePenalty: number;
 }
 
 const DEFAULT_CONFIG: SettingsConfig = {
@@ -32,6 +38,12 @@ const DEFAULT_CONFIG: SettingsConfig = {
   retryDelay: 2,
   saveInterval: 100,
   heartbeatBatchInterval: 5,
+  // LLM 生成参数默认值
+  temperature: 0.3,
+  topP: 1,
+  maxTokens: 0,
+  frequencyPenalty: 0,
+  presencePenalty: 0,
 };
 
 // 将 MODEL_PROVIDERS 转为数组供 Select 使用
@@ -421,6 +433,102 @@ export default function SettingsPage() {
                       onValueChange={([value]) => handleConfigChange('llmCallTimeout', value)}
                     />
                     <p className="text-sm text-muted-foreground">单次 LLM 调用的最大等待时间。本地网络建议 30 秒。</p>
+                  </div>
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>LLM 生成参数</CardTitle>
+                  <CardDescription>控制大模型输出的随机性与多样性</CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-6">
+                  {/* Temperature */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label htmlFor="temperature">Temperature（温度）</Label>
+                        <p className="text-xs text-muted-foreground mt-0.5">控制输出随机性。越低越确定，越高越多样。病种识别建议 0.1–0.5。</p>
+                      </div>
+                      <span className="text-sm font-mono bg-muted px-2 py-1 rounded">{config.temperature}</span>
+                    </div>
+                    <Slider
+                      id="temperature"
+                      min={0} max={2} step={0.05}
+                      value={[config.temperature]}
+                      onValueChange={([value]) => handleConfigChange('temperature', value)}
+                    />
+                  </div>
+
+                  {/* Top P */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label htmlFor="topP">Top P（核采样）</Label>
+                        <p className="text-xs text-muted-foreground mt-0.5">只从累计概率前 P 的 token 中采样。建议与 Temperature 二选一调整，另一个保持默认。</p>
+                      </div>
+                      <span className="text-sm font-mono bg-muted px-2 py-1 rounded">{config.topP}</span>
+                    </div>
+                    <Slider
+                      id="topP"
+                      min={0} max={1} step={0.05}
+                      value={[config.topP]}
+                      onValueChange={([value]) => handleConfigChange('topP', value)}
+                    />
+                  </div>
+
+                  {/* Max Tokens */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label htmlFor="maxTokens">Max Tokens（最大输出 Token 数）</Label>
+                        <p className="text-xs text-muted-foreground mt-0.5">单次调用最多生成的 token 数。设为 0 表示使用模型默认值（推荐）。</p>
+                      </div>
+                    </div>
+                    <Input
+                      id="maxTokens"
+                      type="number"
+                      min={0}
+                      max={32768}
+                      placeholder="0（使用模型默认值）"
+                      value={config.maxTokens === 0 ? '' : config.maxTokens}
+                      onChange={(e) => handleConfigChange('maxTokens', parseInt(e.target.value) || 0)}
+                      className="font-mono w-48"
+                    />
+                  </div>
+
+                  {/* Frequency Penalty */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label htmlFor="frequencyPenalty">Frequency Penalty（频率惩罚）</Label>
+                        <p className="text-xs text-muted-foreground mt-0.5">正值降低重复词出现频率。仅 OpenAI / DeepSeek 等兼容接口支持，其他提供商会忽略。</p>
+                      </div>
+                      <span className="text-sm font-mono bg-muted px-2 py-1 rounded">{config.frequencyPenalty}</span>
+                    </div>
+                    <Slider
+                      id="frequencyPenalty"
+                      min={-2} max={2} step={0.1}
+                      value={[config.frequencyPenalty]}
+                      onValueChange={([value]) => handleConfigChange('frequencyPenalty', parseFloat(value.toFixed(1)))}
+                    />
+                  </div>
+
+                  {/* Presence Penalty */}
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <Label htmlFor="presencePenalty">Presence Penalty（存在惩罚）</Label>
+                        <p className="text-xs text-muted-foreground mt-0.5">正值鼓励模型引入新话题，减少重复内容。仅 OpenAI / DeepSeek 等兼容接口支持。</p>
+                      </div>
+                      <span className="text-sm font-mono bg-muted px-2 py-1 rounded">{config.presencePenalty}</span>
+                    </div>
+                    <Slider
+                      id="presencePenalty"
+                      min={-2} max={2} step={0.1}
+                      value={[config.presencePenalty]}
+                      onValueChange={([value]) => handleConfigChange('presencePenalty', parseFloat(value.toFixed(1)))}
+                    />
                   </div>
                 </CardContent>
               </Card>

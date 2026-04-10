@@ -315,15 +315,24 @@ const saveResultsToExcel = async (
 };
 
 function parseDiseases(response: string): string[] {
-  const cleanedResponse = response.trim();
+  // 去掉可能的破折号/星号前缀（如 "- null" 或 "* null"）
+  const cleanedResponse = response.trim().replace(/^[-*]\s*/, '');
+
+  // 检查是否为 null（模糊无法识别）
+  if (cleanedResponse.toLowerCase() === 'null' || cleanedResponse.toLowerCase() === '[null]') {
+    return ['null'];
+  }
 
   if (cleanedResponse === '未识别到病种' || cleanedResponse.includes('未识别到')) {
     return [];
   }
 
-  const bracketMatch = cleanedResponse.match(/\[(.*)\]/);
+  const bracketMatch = cleanedResponse.match(/\[(.*)\]/s);
   if (bracketMatch) {
-    const diseases = bracketMatch[1]
+    const inner = bracketMatch[1].trim();
+    // [null] 已在上面处理，这里处理 [] 空括号
+    if (inner === '') return [];
+    const diseases = inner
       .split(',')
       .map(d => d.trim())
       .filter(d => d.length > 0);
@@ -342,7 +351,8 @@ function parseDiseases(response: string): string[] {
 
 // 批量解析函数：解析批量返回的结果
 function parseBatchDiseases(response: string, batchSize: number): string[][] {
-  const lines = response.trim().split('\n');
+  // 过滤空行，避免模型输出中的空行导致行号错位
+  const lines = response.trim().split('\n').filter(l => l.trim() !== '');
   const results: string[][] = [];
 
   for (let i = 0; i < batchSize; i++) {
@@ -390,6 +400,11 @@ export async function POST(request: NextRequest) {
           concurrentBatchSize?: number;
           heartbeatBatchInterval?: number;
           model?: string;
+          temperature?: number;
+          topP?: number;
+          maxTokens?: number;
+          frequencyPenalty?: number;
+          presencePenalty?: number;
         }
         let parsedConfig: FrontendConfig = {};
         try {
@@ -408,6 +423,12 @@ export async function POST(request: NextRequest) {
         const concurrentBatchSize = CONCURRENT_BATCH_SIZE; // 固定为50
         const heartbeatBatchInterval = 5; // 固定为5
         const model = parsedConfig.model || LLM_MODEL; // 只允许自定义模型
+        // LLM 生成参数（从前端配置读取）
+        const llmTemperature = parsedConfig.temperature ?? 0.3;
+        const llmTopP = parsedConfig.topP;
+        const llmMaxTokens = parsedConfig.maxTokens || undefined;
+        const llmFrequencyPenalty = parsedConfig.frequencyPenalty;
+        const llmPresencePenalty = parsedConfig.presencePenalty;
 
         if (!file || !column) {
           const errorData = { type: 'error', message: '缺少文件或列名' };
@@ -561,9 +582,12 @@ export async function POST(request: NextRequest) {
             // 构建批量处理的提示词
             const textList = batchTexts.map((item, i) => `${i + 1}. ${item.text}`).join('\n');
 
-            let finalUserPrompt = `提取以下${batchTexts.length}条文本中的病种名称。
+            let finalUserPrompt = `提取以下${batchTexts.length}条文本中的病种名称，按行输出结果（行号对应文本序号）。
 
-按行输出结果（每行格式：[病种1, 病种2, ...] 或 []）：
+每行格式为以下三种之一：
+- [病种1, 病种2, ...]（有明确病种）
+- []（无病种信息）
+- null（描述极度模糊，无法判断，如"性质待定"等）
 
 ${textList}`;
 
@@ -582,7 +606,11 @@ ${textList}`;
                     { role: 'user', content: finalUserPrompt },
                   ],
                   {
-                    temperature: 0.3,
+                    temperature: llmTemperature,
+                    topP: llmTopP,
+                    maxTokens: llmMaxTokens,
+                    frequencyPenalty: llmFrequencyPenalty,
+                    presencePenalty: llmPresencePenalty,
                   }
                 );
 
@@ -694,8 +722,12 @@ ${textList}`;
                       { role: 'system', content: finalSystemPrompt },
                       { role: 'user', content: finalUserPrompt },
                     ],
-                    { 
-                      temperature: 0.3,
+                    {
+                      temperature: llmTemperature,
+                      topP: llmTopP,
+                      maxTokens: llmMaxTokens,
+                      frequencyPenalty: llmFrequencyPenalty,
+                      presencePenalty: llmPresencePenalty,
                     }
                   );
                   

@@ -396,6 +396,11 @@ export default function DiseaseExtractor() {
           userPrompt: customUserPrompt,
           apiKey: apiKey || config.apiKey,
           model: config.model || 'coze/deepseek-v3-2-251201',
+          temperature: config.temperature,
+          topP: config.topP,
+          maxTokens: config.maxTokens,
+          frequencyPenalty: config.frequencyPenalty,
+          presencePenalty: config.presencePenalty,
         }),
       });
 

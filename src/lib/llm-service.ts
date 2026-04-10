@@ -24,6 +24,8 @@ export interface LLMOptions {
   temperature?: number;
   maxTokens?: number;
   topP?: number;
+  frequencyPenalty?: number;
+  presencePenalty?: number;
 }
 
 /**
@@ -124,7 +126,9 @@ export class LLMService {
           messages: messages,
           temperature: options.temperature ?? 0.3,
           top_p: options.topP,
-          max_tokens: options.maxTokens,
+          max_tokens: options.maxTokens || undefined,
+          frequency_penalty: options.frequencyPenalty,
+          presence_penalty: options.presencePenalty,
           stream: false,
         }),
       });
@@ -176,7 +180,9 @@ export class LLMService {
           messages: messages,
           temperature: options.temperature ?? 0.3,
           top_p: options.topP,
-          max_tokens: options.maxTokens,
+          max_tokens: options.maxTokens || undefined,
+          frequency_penalty: options.frequencyPenalty,
+          presence_penalty: options.presencePenalty,
         }),
       });
 
@@ -291,7 +297,9 @@ export class LLMService {
           messages: messages,
           temperature: options.temperature ?? 0.3,
           top_p: options.topP,
-          max_tokens: options.maxTokens,
+          max_tokens: options.maxTokens || undefined,
+          frequency_penalty: options.frequencyPenalty,
+          presence_penalty: options.presencePenalty,
         }),
       });
 
